@@ -30,13 +30,14 @@ type sectionElement struct {
 }
 
 type Template struct {
-    data    string
-    otag    string
-    ctag    string
-    p       int
-    curline int
-    dir     string
-    elems   []interface{}
+    data     string
+    otag     string
+    ctag     string
+    p        int
+    curline  int
+    dir      string
+    elems    []interface{}
+    partials map[string]string
 }
 
 type parseError struct {
@@ -118,7 +119,7 @@ func (tmpl *Template) parsePartial(name string) (*Template, error) {
         return nil, errors.New(fmt.Sprintf("Could not find partial %q", name))
     }
 
-    partial, err := ParseFile(filename)
+    partial, err := ParseFile(filename, tmpl.partials)
 
     if err != nil {
         return nil, err
@@ -184,6 +185,11 @@ func (tmpl *Template) parseSection(section *sectionElement) error {
             }
         case '>':
             name := strings.TrimSpace(tag[1:])
+            prefetchedPartial, ok := tmpl.partials[name]
+            if ok {
+                section.elems = append(section.elems, prefetchedPartial)
+                continue
+            }
             partial, err := tmpl.parsePartial(name)
             if err != nil {
                 return err
@@ -264,6 +270,11 @@ func (tmpl *Template) parse() error {
             return parseError{tmpl.curline, "unmatched close tag"}
         case '>':
             name := strings.TrimSpace(tag[1:])
+            prefetchedPartial, ok := tmpl.partials[name]
+            if ok {
+                tmpl.elems = append(tmpl.elems, prefetchedPartial)
+                continue
+            }
             partial, err := tmpl.parsePartial(name)
             if err != nil {
                 return err
@@ -347,7 +358,7 @@ func lookup(contextChain []interface{}, name string) reflect.Value {
     // dot notation
     if name != "." && strings.Contains(name, ".") {
         parts := strings.SplitN(name, ".", 2)
-        
+
         v := lookup(contextChain, parts[0])
         return lookup([]interface{}{v}, parts[1])
     }
@@ -477,6 +488,8 @@ func renderSection(section *sectionElement, contextChain []interface{}, buf io.W
 
 func renderElement(element interface{}, contextChain []interface{}, buf io.Writer) {
     switch elem := element.(type) {
+    case string:
+        buf.Write([]byte(element.(string)))
     case *textElement:
         buf.Write(elem.text)
     case *varElement:
@@ -527,9 +540,9 @@ func (tmpl *Template) RenderInLayout(layout *Template, context ...interface{}) s
     return layout.Render(allContext...)
 }
 
-func ParseString(data string) (*Template, error) {
+func ParseString(data string, partials map[string]string) (*Template, error) {
     cwd := os.Getenv("CWD")
-    tmpl := Template{data, "{{", "}}", 0, 1, cwd, []interface{}{}}
+    tmpl := Template{data, "{{", "}}", 0, 1, cwd, []interface{}{}, partials}
     err := tmpl.parse()
 
     if err != nil {
@@ -539,7 +552,7 @@ func ParseString(data string) (*Template, error) {
     return &tmpl, err
 }
 
-func ParseFile(filename string) (*Template, error) {
+func ParseFile(filename string, partials map[string]string) (*Template, error) {
     data, err := ioutil.ReadFile(filename)
     if err != nil {
         return nil, err
@@ -547,7 +560,7 @@ func ParseFile(filename string) (*Template, error) {
 
     dirname, _ := path.Split(filename)
 
-    tmpl := Template{string(data), "{{", "}}", 0, 1, dirname, []interface{}{}}
+    tmpl := Template{string(data), "{{", "}}", 0, 1, dirname, []interface{}{}, partials}
     err = tmpl.parse()
 
     if err != nil {
@@ -557,41 +570,41 @@ func ParseFile(filename string) (*Template, error) {
     return &tmpl, nil
 }
 
-func Render(data string, context ...interface{}) string {
-    tmpl, err := ParseString(data)
+func Render(data string, partials map[string]string, context ...interface{}) string {
+    tmpl, err := ParseString(data, partials)
     if err != nil {
         return err.Error()
     }
     return tmpl.Render(context...)
 }
 
-func RenderInLayout(data string, layoutData string, context ...interface{}) string {
-    layoutTmpl, err := ParseString(layoutData)
+func RenderInLayout(data string, layoutData string, partials map[string]string, context ...interface{}) string {
+    layoutTmpl, err := ParseString(layoutData, partials)
     if err != nil {
         return err.Error()
     }
-    tmpl, err := ParseString(data)
+    tmpl, err := ParseString(data, partials)
     if err != nil {
         return err.Error()
     }
     return tmpl.RenderInLayout(layoutTmpl, context...)
 }
 
-func RenderFile(filename string, context ...interface{}) string {
-    tmpl, err := ParseFile(filename)
+func RenderFile(filename string, partials map[string]string, context ...interface{}) string {
+    tmpl, err := ParseFile(filename, partials)
     if err != nil {
         return err.Error()
     }
     return tmpl.Render(context...)
 }
 
-func RenderFileInLayout(filename string, layoutFile string, context ...interface{}) string {
-    layoutTmpl, err := ParseFile(layoutFile)
+func RenderFileInLayout(filename string, layoutFile string, partials map[string]string, context ...interface{}) string {
+    layoutTmpl, err := ParseFile(layoutFile, partials)
     if err != nil {
         return err.Error()
     }
 
-    tmpl, err := ParseFile(filename)
+    tmpl, err := ParseFile(filename, partials)
     if err != nil {
         return err.Error()
     }
